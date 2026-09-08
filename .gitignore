@@ -1,0 +1,8 @@
+# Nothing sensitive lives in this repo — the Gemini key is set in the
+# Cloudflare dashboard (Settings > Environment variables), never in a file
+# here. This .gitignore is just standard hygiene for common editor/OS junk.
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
+node_modules/

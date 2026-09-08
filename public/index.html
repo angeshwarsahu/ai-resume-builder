@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>ATS Resume Builder — AI Powered</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&family=Merriweather:wght@400;700&family=Noto+Sans+Devanagari:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1B2430; --ink-soft:#5B6472; --bg:#F7F8F7; --surface:#FFFFFF;
+    --primary:#1E3A5F; --primary-dark:#152B47; --primary-soft:#E7ECF2;
+    --accent:#1B9E77; --accent-dark:#157F5F; --accent-soft:#E1F5EE;
+    --warn:#B8860B; --warn-soft:#FCF3D9; --danger:#C23B3B; --danger-soft:#FBE7E7; --line:#E4E4DE;
+  }
+  body{font-family:'Inter','Noto Sans Devanagari',ui-sans-serif,system-ui,sans-serif; background:var(--bg); color:var(--ink);}
+  .font-display{font-family:'Sora',ui-sans-serif,system-ui,sans-serif;}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:14px;}
+  .spin{animation:spin .8s linear infinite;} @keyframes spin{to{transform:rotate(360deg);}}
+  .fade-in{animation:fadeIn .18s ease-out;} @keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+  /* Resume print layout: single column, plain, ATS-safe */
+  .resume-doc{ font-family:'Inter',Arial,Helvetica,sans-serif; color:#111; background:#fff; max-width:700px; margin:0 auto; padding:36px 40px; }
+  .resume-doc h1{ font-size:22px; font-weight:700; margin:0 0 2px; }
+  .resume-doc .contact-line{ font-size:12.5px; color:#333; margin-bottom:14px; }
+  .resume-doc h2{ font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; border-bottom:1.5px solid #111; padding-bottom:3px; margin:16px 0 8px; }
+  .resume-doc p, .resume-doc li{ font-size:12.5px; line-height:1.55; }
+  .resume-doc ul{ margin:0 0 4px 18px; padding:0; }
+  .resume-doc .entry-title{ font-weight:700; font-size:13px; }
+  .resume-doc .entry-meta{ font-size:11.5px; color:#444; margin-bottom:3px; }
+  /* Templates: all stay single-column, no tables/icons/graphics — only
+     typography/color/spacing change, so ATS-safety is never at risk. */
+  .tpl-modern h1{ color:var(--primary); }
+  .tpl-modern h2{ color:var(--primary); border-bottom-color:var(--primary); }
+  .tpl-classic{ font-family:'Georgia','Times New Roman',serif; }
+  .tpl-classic h1{ letter-spacing:.02em; }
+  .tpl-classic h2{ font-family:'Georgia','Times New Roman',serif; font-style:italic; text-transform:none; letter-spacing:0; border-bottom:1px solid #111; }
+  .tpl-minimal h1{ font-weight:600; }
+  .tpl-minimal h2{ border-bottom:none; border-top:1px solid #ccc; padding-top:6px; color:#555; font-weight:600; }
+  @media print{ body *{ visibility:hidden; } .resume-doc, .resume-doc *, .letter-doc, .letter-doc *{ visibility:visible; } .resume-doc, .letter-doc{ position:absolute; top:0; left:0; padding:0 20px; } }
+  .letter-doc{ font-family:'Inter',Arial,Helvetica,sans-serif; color:#111; background:#fff; max-width:700px; margin:0 auto; padding:36px 40px; }
+  .letter-doc p{ font-size:12.5px; line-height:1.7; margin-bottom:12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useMemo} = React;
+
+/* ---------------- storage ----------------
+   IMPORTANT: window.storage is a Claude.ai-artifact-only API — it does NOT
+   exist on a real deployed website (Cloudflare Pages or anywhere else).
+   Using it there means every sGet/sSet silently fails (caught by the
+   try/catch below) and NOTHING persists, with no visible error. Real
+   browser localStorage is what actually works once this is deployed. */
+async function sGet(key, fallback){
+  try{
+    const raw = localStorage.getItem(key);
+    return raw !== null ? JSON.parse(raw) : fallback;
+  }catch(e){ return fallback; }
+}
+async function sSet(key, value){
+  try{ localStorage.setItem(key, JSON.stringify(value)); }catch(e){}
+}
+const uid = () => Math.random().toString(36).slice(2,10);
+
+/* ---------------- AI (calls our own backend — no key in the browser) ---------------- */
+async function callBackend(path, payload){
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.message || "AI request failed");
+  }
+  return data.data;
+}
+
+async function generateResume({profile, jd, level}){
+  return await callBackend("/api/generate-resume", { profile, jd, level });
+}
+
+async function generateCoverLetter({profile, jd, level}){
+  return await callBackend("/api/generate-cover-letter", { profile, jd, level });
+}
+
+async function generateInterviewQuestions({profile, jd, level}){
+  return await callBackend("/api/interview-questions", { profile, jd, level });
+}
+
+async function getInterviewFeedback({question, answer, targetRole}){
+  return await callBackend("/api/interview-feedback", { question, answer, targetRole });
+}
+
+async function optimizeLinkedIn({profile, level}){
+  return await callBackend("/api/linkedin-optimize", { profile, level });
+}
+
+/* ---------------- UI kit ---------------- */
+function Btn({children,onClick,variant="primary",size="md",full,disabled,className=""}){
+  const sizes={md:"px-4 py-2.5 text-[14px]",sm:"px-3 py-2 text-[13px]",lg:"px-5 py-3.5 text-[15px]"};
+  const styles = variant==="primary"?{background:"var(--primary)",color:"#fff"}:variant==="accent"?{background:"var(--accent)",color:"#fff"}:variant==="secondary"?{background:"#fff",color:"var(--ink)",border:"1px solid var(--line)"}:{background:"transparent",color:"var(--ink-soft)"};
+  return <button onClick={onClick} disabled={disabled} className={`rounded-lg font-semibold inline-flex items-center justify-center gap-1.5 transition active:scale-[.97] disabled:opacity-50 ${sizes[size]} ${full?"w-full":""} ${className}`} style={styles}>{children}</button>;
+}
+function Card({children,className="",style}){ return <div className={`card ${className}`} style={{boxShadow:"0 1px 2px rgba(27,36,48,.05)",...style}}>{children}</div>; }
+function Field({label,children,hint}){
+  const id = "f-" + String(label).toLowerCase().replace(/[^a-z0-9]+/g,"-");
+  const child = React.cloneElement(children, { id });
+  return <label htmlFor={id} className="block mb-3.5"><span className="block text-[12.5px] font-semibold mb-1.5" style={{color:"var(--ink-soft)"}}>{label}</span>{child}{hint && <span className="block text-[11px] mt-1" style={{color:"var(--ink-soft)"}}>{hint}</span>}</label>;
+}
+const inputCls="w-full rounded-lg border px-3 py-2 text-[14px] outline-none";
+function TI(props){ return <input {...props} className={`${inputCls} ${props.className||""}`} style={{borderColor:"var(--line)"}}/>; }
+function TA(props){ return <textarea {...props} className={`${inputCls} ${props.className||""}`} style={{borderColor:"var(--line)"}}/>; }
+function Loader({label}){ return <div className="flex items-center gap-2 text-[13px]" style={{color:"var(--ink-soft)"}}><svg className="spin" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="var(--line)" strokeWidth="3"/><path d="M21 12a9 9 0 00-9-9" stroke="var(--primary)" strokeWidth="3" strokeLinecap="round"/></svg>{label}</div>; }
+
+/* ---------------- Repeatable list editor ---------------- */
+function ListEditor({items, setItems, fields, addLabel, renderSummary}){
+  const add = () => setItems([...items, Object.fromEntries(fields.map(f=>[f.key,""]))]);
+  const update = (i,k,v) => { const next=[...items]; next[i]={...next[i],[k]:v}; setItems(next); };
+  const remove = (i) => setItems(items.filter((_,idx)=>idx!==i));
+  return (
+    <div className="space-y-3">
+      {items.map((item,i)=>(
+        <div key={i} className="p-3 rounded-lg border" style={{borderColor:"var(--line)"}}>
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-[12px] font-bold" style={{color:"var(--ink-soft)"}}>{renderSummary ? renderSummary(item) : `#${i+1}`}</span>
+            <button onClick={()=>remove(i)} className="text-[11px] font-bold" style={{color:"var(--danger)"}}>Remove</button>
+          </div>
+          {fields.map(f=>(
+            <div key={f.key} className="mb-2">
+              <span className="block text-[11px] font-semibold mb-1" style={{color:"var(--ink-soft)"}}>{f.label}</span>
+              {f.multiline ? <TA rows={2} value={item[f.key]} onChange={e=>update(i,f.key,e.target.value)} placeholder={f.placeholder}/> : <TI value={item[f.key]} onChange={e=>update(i,f.key,e.target.value)} placeholder={f.placeholder}/>}
+            </div>
+          ))}
+        </div>
+      ))}
+      <Btn variant="secondary" size="sm" onClick={add}>+ {addLabel}</Btn>
+    </div>
+  );
+}
+
+/* ---------------- Profile form ---------------- */
+function ProfileForm({profile, setProfile, level, setLevel}){
+  const set = (k,v) => setProfile({...profile, [k]: v});
+  return (
+    <div>
+      <div className="flex gap-2 mb-4">
+        {["fresher","experienced","switcher"].map(l=>(
+          <button key={l} onClick={()=>setLevel(l)} className="flex-1 py-2.5 rounded-lg text-[13px] font-semibold border capitalize"
+            style={level===l?{background:"var(--primary)",color:"#fff",borderColor:"var(--primary)"}:{borderColor:"var(--line)"}}>{l}</button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Full name"><TI value={profile.name} onChange={e=>set("name",e.target.value)} placeholder="Ravi Kumar"/></Field>
+        <Field label="Target role"><TI value={profile.targetRole} onChange={e=>set("targetRole",e.target.value)} placeholder="Data Analyst"/></Field>
+        <Field label="Email"><TI type="email" value={profile.email} onChange={e=>set("email",e.target.value)} placeholder="ravi@email.com"/></Field>
+        <Field label="Phone"><TI type="tel" value={profile.phone} onChange={e=>set("phone",e.target.value)} placeholder="98xxxxxxxx"/></Field>
+        <Field label="Location"><TI value={profile.location} onChange={e=>set("location",e.target.value)} placeholder="Bhopal, India"/></Field>
+        <Field label="LinkedIn (optional)"><TI value={profile.linkedin} onChange={e=>set("linkedin",e.target.value)} placeholder="linkedin.com/in/..."/></Field>
+      </div>
+
+      <div className="mt-2 mb-1 text-[13px] font-bold" style={{color:"var(--primary)"}}>Education</div>
+      <ListEditor items={profile.education} setItems={v=>set("education",v)} addLabel="Add education"
+        renderSummary={it=>it.degree||"New entry"}
+        fields={[{key:"degree",label:"Degree",placeholder:"B.Tech Computer Science"},{key:"institution",label:"Institution",placeholder:"XYZ University"},{key:"year",label:"Year",placeholder:"2024"},{key:"score",label:"Score (optional)",placeholder:"8.2 CGPA"}]}/>
+
+      <div className="mt-5 mb-1 text-[13px] font-bold" style={{color:"var(--primary)"}}>Experience {level==="fresher" && "(skip if none — internships count!)"}</div>
+      <ListEditor items={profile.experience} setItems={v=>set("experience",v)} addLabel="Add experience"
+        renderSummary={it=>it.title||"New entry"}
+        fields={[{key:"title",label:"Job title",placeholder:"Sales Executive"},{key:"company",label:"Company",placeholder:"ABC Pvt Ltd"},{key:"duration",label:"Duration",placeholder:"Jun 2023 – Present"},{key:"notes",label:"What did you actually do? (rough notes, AI will polish this)",multiline:true,placeholder:"handled customer calls, closed sales, used excel for tracking..."}]}/>
+
+      <div className="mt-5 mb-1 text-[13px] font-bold" style={{color:"var(--primary)"}}>Projects</div>
+      <ListEditor items={profile.projects} setItems={v=>set("projects",v)} addLabel="Add project"
+        renderSummary={it=>it.name||"New entry"}
+        fields={[{key:"name",label:"Project name",placeholder:"Inventory tracker"},{key:"notes",label:"What did it do? (rough notes)",multiline:true,placeholder:"built a small app to track stock using..."}]}/>
+
+      <Field label="Skills (comma separated)" hint="Only list what you actually know"><TA rows={2} value={profile.skills} onChange={e=>set("skills",e.target.value)} placeholder="Excel, SQL, Python, communication..."/></Field>
+      <Field label="Certifications (comma separated, optional)"><TI value={profile.certifications} onChange={e=>set("certifications",e.target.value)} placeholder="Google Data Analytics Certificate"/></Field>
+    </div>
+  );
+}
+
+/* ---------------- ATS checklist (structural, guaranteed by design) ---------------- */
+const STRUCTURAL_CHECKS = [
+  "Single-column layout",
+  "No tables or text boxes",
+  "No icons in resume content",
+  "Standard section headings",
+  "Standard font (Inter/Arial-equivalent)",
+  "Selectable, copy-pasteable text",
+];
+
+function ResultPanel({result, jd}){
+  if(!result) return null;
+  return (
+    <div className="mt-4 space-y-3 fade-in">
+      <Card className="p-4">
+        <div className="font-display font-bold text-[14px] mb-2">ATS Structure — guaranteed by this builder</div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {STRUCTURAL_CHECKS.map((c,i)=>(<div key={i} className="text-[12px] flex items-center gap-1.5"><span style={{color:"var(--accent)"}}>✓</span>{c}</div>))}
+        </div>
+      </Card>
+      {result.atsChecklist?.length>0 && (
+        <Card className="p-4">
+          <div className="font-display font-bold text-[14px] mb-2">Content quality check</div>
+          {result.atsChecklist.map((c,i)=>(
+            <div key={i} className="flex items-start gap-2 py-1.5 text-[12.5px]">
+              <span style={{color: c.status==="pass"?"var(--accent)":"var(--warn)"}}>{c.status==="pass"?"✓":"⚠"}</span>
+              <div><span className="font-semibold">{c.item}</span>{c.note && <span style={{color:"var(--ink-soft)"}}> — {c.note}</span>}</div>
+            </div>
+          ))}
+        </Card>
+      )}
+      {jd && result.keywordMatch?.length>0 && (
+        <Card className="p-4">
+          <div className="font-display font-bold text-[14px] mb-2">Keyword match with job description</div>
+          <div className="flex flex-wrap gap-1.5">
+            {result.keywordMatch.map((k,i)=>(
+              <span key={i} className="text-[11.5px] font-bold px-2.5 py-1 rounded-full" style={k.present?{background:"var(--accent-soft)",color:"var(--accent-dark)"}:{background:"var(--danger-soft)",color:"var(--danger)"}}>
+                {k.present?"✓ ":"✕ "}{k.keyword}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Section order (content-quality fix) ----------------
+   A fresher's strongest asset is usually education/projects, not a thin or
+   empty experience section — so freshers get Education+Projects before
+   Experience. Experienced/switcher candidates lead with Experience, since
+   that's what a recruiter scans for first. All three export paths (screen
+   preview, plain-text copy, DOCX download) share this one order so they
+   never drift out of sync with each other. */
+function getSectionOrder(level){
+  if(level === "fresher") return ["summary","education","skills","projects","experience","certifications"];
+  return ["summary","skills","experience","projects","education","certifications"];
+}
+
+function ResumeDoc({profile, result, template}){
+  if(!result) return null;
+  const contact = [profile.email, profile.phone, profile.location, profile.linkedin].filter(Boolean).join("  •  ");
+  const order = getSectionOrder(result._level || "experienced");
+  const sections = {
+    summary: result.summary && <><h2>Summary</h2><p>{result.summary}</p></>,
+    skills: result.skills?.length>0 && <><h2>Skills</h2><p>{result.skills.join(" • ")}</p></>,
+    experience: result.experience?.length>0 && <><h2>Experience</h2>
+      {result.experience.map((e,i)=>(
+        <div key={i} style={{marginBottom:8}}>
+          <div className="entry-title">{e.title}{e.company?` — ${e.company}`:""}</div>
+          <div className="entry-meta">{e.duration}</div>
+          <ul>{e.bullets?.map((b,j)=><li key={j}>{b}</li>)}</ul>
+        </div>
+      ))}
+    </>,
+    projects: result.projects?.length>0 && <><h2>Projects</h2>
+      {result.projects.map((p,i)=>(
+        <div key={i} style={{marginBottom:8}}>
+          <div className="entry-title">{p.name}</div>
+          <ul>{p.bullets?.map((b,j)=><li key={j}>{b}</li>)}</ul>
+        </div>
+      ))}
+    </>,
+    education: result.education?.length>0 && <><h2>Education</h2>
+      {result.education.map((ed,i)=>(
+        <div key={i} style={{marginBottom:4}}>
+          <div className="entry-title">{ed.degree}</div>
+          <div className="entry-meta">{ed.institution} {ed.year && `— ${ed.year}`} {ed.score && `— ${ed.score}`}</div>
+        </div>
+      ))}
+    </>,
+    certifications: result.certifications?.length>0 && <><h2>Certifications</h2><p>{result.certifications.join(" • ")}</p></>,
+  };
+  return (
+    <div className={`resume-doc card tpl-${template}`}>
+      <h1>{profile.name || "Your Name"}</h1>
+      <div className="contact-line">{contact}</div>
+      {order.map(key=><React.Fragment key={key}>{sections[key]}</React.Fragment>)}
+    </div>
+  );
+}
+
+function CoverLetterDoc({profile, letter}){
+  if(!letter) return null;
+  const today = new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"});
+  return (
+    <div className="letter-doc card">
+      <div style={{fontSize:12.5,marginBottom:16}}>{today}</div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:16}}>{profile.name}</div>
+      {(letter.paragraphs||[]).map((p,i)=><p key={i}>{p}</p>)}
+      <div style={{marginTop:16,fontSize:12.5}}>Sincerely,<br/>{profile.name}</div>
+    </div>
+  );
+}
+
+/* ---------------- Interview Prep ---------------- */
+function InterviewQuestionCard({q, targetRole}){
+  const [answer,setAnswer] = useState("");
+  const [feedback,setFeedback] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState(null);
+
+  const submit = async () => {
+    if(!answer.trim()) return;
+    setLoading(true); setError(null); setFeedback(null);
+    try{
+      const r = await getInterviewFeedback({question:q.question, answer, targetRole});
+      setFeedback(r);
+    }catch(e){ setError(e.message || "Could not get feedback right now."); }
+    setLoading(false);
+  };
+
+  const catTone = {behavioral:"var(--primary)", technical:"var(--accent)", situational:"var(--warn)", closing:"var(--ink-soft)"};
+
+  return (
+    <Card className="p-4 mb-3">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="font-semibold text-[14px]">{q.question}</div>
+        <span className="text-[10.5px] font-bold px-2 py-1 rounded-full whitespace-nowrap capitalize" style={{background:"var(--primary-soft)", color: catTone[q.category]||"var(--ink-soft)"}}>{q.category}</span>
+      </div>
+      <TA rows={3} value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Type your answer here to practice..."/>
+      <Btn size="sm" className="mt-2" onClick={submit} disabled={loading || !answer.trim()}>
+        {loading? <Loader label="Checking..."/> : "Get Feedback"}
+      </Btn>
+      {error && <div className="mt-2 text-[12px] px-3 py-2 rounded-lg" style={{background:"var(--danger-soft)",color:"var(--danger)"}}>{error}</div>}
+      {feedback && (
+        <div className="mt-3 p-3 rounded-lg fade-in" style={{background:"var(--bg)"}}>
+          {feedback.strengths?.length>0 && <div className="mb-2">
+            <div className="text-[11px] font-bold mb-1" style={{color:"var(--accent-dark)"}}>Strengths</div>
+            {feedback.strengths.map((s,i)=><div key={i} className="text-[12.5px] flex gap-1.5"><span style={{color:"var(--accent)"}}>✓</span>{s}</div>)}
+          </div>}
+          {feedback.improvements?.length>0 && <div className="mb-2">
+            <div className="text-[11px] font-bold mb-1" style={{color:"var(--warn)"}}>Could improve</div>
+            {feedback.improvements.map((s,i)=><div key={i} className="text-[12.5px] flex gap-1.5"><span style={{color:"var(--warn)"}}>⚠</span>{s}</div>)}
+          </div>}
+          {feedback.betterOpening && <div className="text-[12px] italic mt-2" style={{color:"var(--ink-soft)"}}>Try opening with: "{feedback.betterOpening}"</div>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function InterviewPrepPanel({profile, jd, level}){
+  const [questions,setQuestions] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState(null);
+
+  const run = async () => {
+    setLoading(true); setError(null); setQuestions(null);
+    try{
+      const r = await generateInterviewQuestions({profile, jd, level});
+      setQuestions(r.questions||[]);
+    }catch(e){ setError(e.message || "Could not reach AI right now."); }
+    setLoading(false);
+  };
+
+  return (
+    <div>
+      <Card className="p-4 mb-3">
+        <div className="text-[13px] mb-2" style={{color:"var(--ink-soft)"}}>Generates likely interview questions from your profile{jd?" and the job description":""}. Answer in your own words, then get AI feedback on each one.</div>
+        <Btn onClick={run} disabled={loading || !profile.name}>{loading? <Loader label="Preparing questions..."/> : (questions?"Regenerate Questions":"Generate Interview Questions")}</Btn>
+        {error && <div className="mt-3 text-[12.5px] px-3 py-2 rounded-lg" style={{background:"var(--danger-soft)",color:"var(--danger)"}}>{error}</div>}
+      </Card>
+      {questions && questions.map(q=><InterviewQuestionCard key={q.id} q={q} targetRole={profile.targetRole}/>)}
+    </div>
+  );
+}
+
+/* ---------------- LinkedIn Optimizer ---------------- */
+function LinkedInPanel({profile, level}){
+  const [result,setResult] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState(null);
+  const [copied,setCopied] = useState("");
+
+  const run = async () => {
+    setLoading(true); setError(null); setResult(null);
+    try{
+      const r = await optimizeLinkedIn({profile, level});
+      setResult(r);
+    }catch(e){ setError(e.message || "Could not reach AI right now."); }
+    setLoading(false);
+  };
+
+  const copy = (text, which) => { navigator.clipboard.writeText(text).catch(()=>{}); setCopied(which); setTimeout(()=>setCopied(""),1500); };
+
+  return (
+    <div>
+      <Card className="p-4 mb-3">
+        <div className="text-[13px] mb-2" style={{color:"var(--ink-soft)"}}>Generates a LinkedIn headline and About section from your profile above — nothing invented, only your real background, rewritten for LinkedIn.</div>
+        <Btn onClick={run} disabled={loading || !profile.name}>{loading? <Loader label="Writing..."/> : "Generate LinkedIn Content"}</Btn>
+        {error && <div className="mt-3 text-[12.5px] px-3 py-2 rounded-lg" style={{background:"var(--danger-soft)",color:"var(--danger)"}}>{error}</div>}
+      </Card>
+      {result && (
+        <>
+          <Card className="p-4 mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-display font-bold text-[14px]">Headline</div>
+              <Btn size="sm" variant="secondary" onClick={()=>copy(result.headline,"headline")}>{copied==="headline"?"✓ Copied":"Copy"}</Btn>
+            </div>
+            <div className="text-[13.5px] p-3 rounded-lg" style={{background:"var(--bg)"}}>{result.headline}</div>
+          </Card>
+          <Card className="p-4 mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-display font-bold text-[14px]">About</div>
+              <Btn size="sm" variant="secondary" onClick={()=>copy(result.about,"about")}>{copied==="about"?"✓ Copied":"Copy"}</Btn>
+            </div>
+            <div className="text-[13.5px] p-3 rounded-lg whitespace-pre-line" style={{background:"var(--bg)"}}>{result.about}</div>
+          </Card>
+          {result.skillsToAdd?.length>0 && (
+            <Card className="p-4">
+              <div className="font-display font-bold text-[14px] mb-2">Skills worth adding</div>
+              <div className="flex flex-wrap gap-1.5">{result.skillsToAdd.map((s,i)=><span key={i} className="text-[11.5px] font-bold px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)",color:"var(--accent-dark)"}}>{s}</span>)}</div>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Application Tracker (fully local — your data never leaves your browser) ---------------- */
+const TRACKER_STATUSES = ["applied","interview","offer","rejected"];
+const TRACKER_STATUS_LABEL = {applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected"};
+const TRACKER_STATUS_TONE = {applied:"var(--primary)", interview:"var(--warn)", offer:"var(--accent)", rejected:"var(--danger)"};
+
+function TrackerForm({onAdd}){
+  const [f,setF] = useState({company:"",role:"",dateApplied:new Date().toISOString().slice(0,10),status:"applied",link:"",notes:""});
+  const set=(k,v)=>setF(x=>({...x,[k]:v}));
+  return (
+    <Card className="p-4 mb-4">
+      <div className="font-display font-bold text-[14px] mb-3">Add application</div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Company"><TI value={f.company} onChange={e=>set("company",e.target.value)} placeholder="Acme Corp"/></Field>
+        <Field label="Role"><TI value={f.role} onChange={e=>set("role",e.target.value)} placeholder="Data Analyst"/></Field>
+        <Field label="Date applied"><TI type="date" value={f.dateApplied} onChange={e=>set("dateApplied",e.target.value)}/></Field>
+        <Field label="Status">
+          <div className="flex gap-1.5 flex-wrap">
+            {TRACKER_STATUSES.map(s=>(
+              <button key={s} type="button" onClick={()=>set("status",s)} className="px-2.5 py-1.5 rounded-full text-[11.5px] font-bold border"
+                style={f.status===s?{background:TRACKER_STATUS_TONE[s],color:"#fff",borderColor:TRACKER_STATUS_TONE[s]}:{borderColor:"var(--line)"}}>{TRACKER_STATUS_LABEL[s]}</button>
+            ))}
+          </div>
+        </Field>
+      </div>
+      <Field label="Job link (optional)"><TI value={f.link} onChange={e=>set("link",e.target.value)} placeholder="https://..."/></Field>
+      <Field label="Notes (optional)"><TA rows={2} value={f.notes} onChange={e=>set("notes",e.target.value)} placeholder="Recruiter name, referral, follow-up date..."/></Field>
+      <Btn full disabled={!f.company.trim() || !f.role.trim()} onClick={()=>{ onAdd({...f, id:uid()}); setF({company:"",role:"",dateApplied:new Date().toISOString().slice(0,10),status:"applied",link:"",notes:""}); }}>Add to tracker</Btn>
+    </Card>
+  );
+}
+
+function TrackerPage(){
+  const [items,setItems] = useState(null);
+  const [filter,setFilter] = useState("all");
+
+  useEffect(()=>{ (async ()=>{ const it = await sGet("tracker-items", []); setItems(it); })(); },[]);
+  useEffect(()=>{ if(items!==null) sSet("tracker-items", items); },[items]);
+
+  if(items===null) return <Loader label="Loading..."/>;
+
+  const add = (item) => setItems([item, ...items]);
+  const updateStatus = (id, status) => setItems(items.map(x=>x.id===id?{...x,status}:x));
+  const remove = (id) => setItems(items.filter(x=>x.id!==id));
+
+  const filtered = filter==="all" ? items : items.filter(x=>x.status===filter);
+  const counts = TRACKER_STATUSES.reduce((acc,s)=>({...acc,[s]:items.filter(x=>x.status===s).length}),{});
+
+  return (
+    <div className="max-w-3xl mx-auto p-4">
+      <div className="font-display font-extrabold text-[20px] mb-1">Application Tracker</div>
+      <div className="text-[12.5px] mb-4" style={{color:"var(--ink-soft)"}}>Saved only in this browser — nothing is sent anywhere. Clearing your browser data will remove it.</div>
+
+      <TrackerForm onAdd={add}/>
+
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <button onClick={()=>setFilter("all")} className="px-3 py-1.5 rounded-full text-[12px] font-bold border" style={filter==="all"?{background:"var(--primary)",color:"#fff",borderColor:"var(--primary)"}:{borderColor:"var(--line)"}}>All ({items.length})</button>
+        {TRACKER_STATUSES.map(s=>(
+          <button key={s} onClick={()=>setFilter(s)} className="px-3 py-1.5 rounded-full text-[12px] font-bold border" style={filter===s?{background:TRACKER_STATUS_TONE[s],color:"#fff",borderColor:TRACKER_STATUS_TONE[s]}:{borderColor:"var(--line)"}}>{TRACKER_STATUS_LABEL[s]} ({counts[s]})</button>
+        ))}
+      </div>
+
+      {filtered.length===0 ? (
+        <Card className="p-10 text-center" style={{color:"var(--ink-soft)"}}>
+          <div className="text-[14px] font-semibold mb-1">No applications {filter!=="all" && `with status "${TRACKER_STATUS_LABEL[filter]}"`} yet</div>
+          <div className="text-[12.5px]">Add one above to start tracking</div>
+        </Card>
+      ) : filtered.map(item=>(
+        <Card key={item.id} className="p-3.5 mb-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="font-semibold text-[14px]">{item.role} — {item.company}</div>
+              <div className="text-[12px]" style={{color:"var(--ink-soft)"}}>Applied {item.dateApplied}{item.link && <> · <a href={item.link} target="_blank" rel="noreferrer" style={{color:"var(--primary)"}}>Job link</a></>}</div>
+              {item.notes && <div className="text-[12.5px] mt-1">{item.notes}</div>}
+            </div>
+            <button onClick={()=>remove(item.id)} className="text-[11px] font-bold shrink-0" style={{color:"var(--danger)"}}>Remove</button>
+          </div>
+          <div className="flex gap-1.5 flex-wrap mt-2.5">
+            {TRACKER_STATUSES.map(s=>(
+              <button key={s} onClick={()=>updateStatus(item.id,s)} className="px-2.5 py-1 rounded-full text-[11px] font-bold border"
+                style={item.status===s?{background:TRACKER_STATUS_TONE[s],color:"#fff",borderColor:TRACKER_STATUS_TONE[s]}:{borderColor:"var(--line)",color:"var(--ink-soft)"}}>{TRACKER_STATUS_LABEL[s]}</button>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+const TEMPLATES = [
+  {id:"modern", label:"Modern", swatch:"var(--primary)"},
+  {id:"classic", label:"Classic", swatch:"#111"},
+  {id:"minimal", label:"Minimal", swatch:"#888"},
+];
+function TemplatePicker({template,setTemplate}){
+  return (
+    <div className="flex gap-2 mb-3">
+      {TEMPLATES.map(t=>(
+        <button key={t.id} onClick={()=>setTemplate(t.id)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[12px] font-semibold"
+          style={template===t.id?{borderColor:t.swatch,background:"#fff"}:{borderColor:"var(--line)"}}>
+          <span style={{width:9,height:9,borderRadius:99,background:t.swatch,display:"inline-block"}}></span>{t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function resumeToPlainText(profile, result){
+  const order = getSectionOrder(result._level || "experienced");
+  const lines = [];
+  lines.push(profile.name || "");
+  lines.push([profile.email,profile.phone,profile.location,profile.linkedin].filter(Boolean).join(" | "));
+  lines.push("");
+  const writers = {
+    summary: ()=>{ if(result.summary){ lines.push("SUMMARY"); lines.push(result.summary); lines.push(""); } },
+    skills: ()=>{ if(result.skills?.length){ lines.push("SKILLS"); lines.push(result.skills.join(", ")); lines.push(""); } },
+    experience: ()=>{ if(result.experience?.length){ lines.push("EXPERIENCE");
+      result.experience.forEach(e=>{ lines.push(`${e.title} — ${e.company} (${e.duration})`); (e.bullets||[]).forEach(b=>lines.push("- "+b)); lines.push(""); }); } },
+    projects: ()=>{ if(result.projects?.length){ lines.push("PROJECTS");
+      result.projects.forEach(p=>{ lines.push(p.name); (p.bullets||[]).forEach(b=>lines.push("- "+b)); lines.push(""); }); } },
+    education: ()=>{ if(result.education?.length){ lines.push("EDUCATION");
+      result.education.forEach(ed=>{ lines.push(`${ed.degree} — ${ed.institution} ${ed.year||""} ${ed.score||""}`); }); lines.push(""); } },
+    certifications: ()=>{ if(result.certifications?.length){ lines.push("CERTIFICATIONS"); lines.push(result.certifications.join(", ")); } },
+  };
+  order.forEach(key=>writers[key]());
+  return lines.join("\n");
+}
+
+/* ---------------- DOCX export (client-side, zero server cost) ----------------
+   Uses the docx.js library loaded in <head>. Same section order as the
+   screen preview and the plain-text copy, so all three exports always agree
+   with each other — one place (getSectionOrder) decides the order for all. */
+async function downloadDocx(profile, result){
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
+  const order = getSectionOrder(result._level || "experienced");
+  const children = [];
+
+  children.push(new Paragraph({ children: [new TextRun({ text: profile.name || "Your Name", bold: true, size: 32 })] }));
+  const contact = [profile.email, profile.phone, profile.location, profile.linkedin].filter(Boolean).join("  |  ");
+  if(contact) children.push(new Paragraph({ children: [new TextRun({ text: contact, size: 20, color: "444444" })] }));
+
+  const heading = (text) => new Paragraph({ text, heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 80 } });
+  const bullet = (text) => new Paragraph({ text, bullet: { level: 0 } });
+
+  const builders = {
+    summary: ()=>{ if(result.summary){ children.push(heading("Summary")); children.push(new Paragraph({ text: result.summary })); } },
+    skills: ()=>{ if(result.skills?.length){ children.push(heading("Skills")); children.push(new Paragraph({ text: result.skills.join(" • ") })); } },
+    experience: ()=>{ if(result.experience?.length){ children.push(heading("Experience"));
+      result.experience.forEach(e=>{
+        children.push(new Paragraph({ children:[new TextRun({ text: `${e.title}${e.company?` — ${e.company}`:""}`, bold:true })] }));
+        if(e.duration) children.push(new Paragraph({ children:[new TextRun({ text: e.duration, italics:true, size:18, color:"555555" })] }));
+        (e.bullets||[]).forEach(b=>children.push(bullet(b)));
+      }); } },
+    projects: ()=>{ if(result.projects?.length){ children.push(heading("Projects"));
+      result.projects.forEach(p=>{
+        children.push(new Paragraph({ children:[new TextRun({ text: p.name, bold:true })] }));
+        (p.bullets||[]).forEach(b=>children.push(bullet(b)));
+      }); } },
+    education: ()=>{ if(result.education?.length){ children.push(heading("Education"));
+      result.education.forEach(ed=>{
+        children.push(new Paragraph({ text: `${ed.degree} — ${ed.institution} ${ed.year||""} ${ed.score||""}`.trim() }));
+      }); } },
+    certifications: ()=>{ if(result.certifications?.length){ children.push(heading("Certifications")); children.push(new Paragraph({ text: result.certifications.join(" • ") })); } },
+  };
+  order.forEach(key=>builders[key]());
+
+  const docDefinition = new Document({ sections: [{ children }] });
+  const blob = await Packer.toBlob(docDefinition);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(profile.name||"resume").trim().replace(/\s+/g,"_")}_Resume.docx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ---------------- DOCX export for cover letter (same library, same pattern) ---------------- */
+async function downloadLetterDocx(profile, letter){
+  const { Document, Packer, Paragraph, TextRun } = docx;
+  const today = new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"});
+  const children = [
+    new Paragraph({ children: [new TextRun({ text: today, size: 20 })], spacing: { after: 200 } }),
+    new Paragraph({ children: [new TextRun({ text: profile.name || "", bold: true, size: 22 })], spacing: { after: 200 } }),
+    ...(letter.paragraphs||[]).map(p => new Paragraph({ text: p, spacing: { after: 160 } })),
+    new Paragraph({ text: "Sincerely," }),
+    new Paragraph({ text: profile.name || "" }),
+  ];
+  const docDefinition = new Document({ sections: [{ children }] });
+  const blob = await Packer.toBlob(docDefinition);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(profile.name||"cover_letter").trim().replace(/\s+/g,"_")}_Cover_Letter.docx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ---------------- App ---------------- */
+function App(){
+  const [ready,setReady] = useState(false);
+  const [level,setLevel] = useState("fresher");
+  const [profile,setProfile] = useState({
+    name:"",email:"",phone:"",location:"",linkedin:"",targetRole:"",
+    education:[], experience:[], projects:[], skills:"", certifications:"",
+  });
+  const [jd,setJd] = useState("");
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState(null);
+  const [result,setResult] = useState(null);
+  const [copied,setCopied] = useState(false);
+  const [template,setTemplate] = useState("modern");
+  const [rightTab,setRightTab] = useState("resume");
+  const [letter,setLetter] = useState(null);
+  const [letterLoading,setLetterLoading] = useState(false);
+  const [letterError,setLetterError] = useState(null);
+  const [docxBusy,setDocxBusy] = useState(false);
+  const [letterDocxBusy,setLetterDocxBusy] = useState(false);
+  const [section,setSection] = useState("resume");
+
+  useEffect(()=>{ (async ()=>{
+    const p = await sGet("resume-profile", null);
+    if(p) setProfile(p);
+    const l = await sGet("resume-level", "fresher");
+    setLevel(l);
+    const t = await sGet("resume-template", "modern");
+    setTemplate(t);
+    const savedJd = await sGet("resume-jd", "");
+    setJd(savedJd);
+    const savedResult = await sGet("resume-result", null);
+    if(savedResult) setResult(savedResult);
+    const savedLetter = await sGet("resume-letter", null);
+    if(savedLetter) setLetter(savedLetter);
+    setReady(true);
+  })(); },[]);
+
+  useEffect(()=>{ if(ready) sSet("resume-profile", profile); },[profile,ready]);
+  useEffect(()=>{ if(ready) sSet("resume-level", level); },[level,ready]);
+  useEffect(()=>{ if(ready) sSet("resume-template", template); },[template,ready]);
+  useEffect(()=>{ if(ready) sSet("resume-jd", jd); },[jd,ready]);
+  useEffect(()=>{ if(ready) sSet("resume-result", result); },[result,ready]);
+  useEffect(()=>{ if(ready) sSet("resume-letter", letter); },[letter,ready]);
+
+  const run = async () => {
+    setLoading(true); setError(null); setResult(null);
+    try{
+      const r = await generateResume({profile, jd, level});
+      setResult({...r, _level: level});
+    }catch(e){ setError(e.message || "Could not reach AI right now. Please try again."); }
+    setLoading(false);
+  };
+
+  const runLetter = async () => {
+    setLetterLoading(true); setLetterError(null); setLetter(null);
+    try{
+      const r = await generateCoverLetter({profile, jd, level});
+      setLetter(r);
+    }catch(e){ setLetterError(e.message || "Could not reach AI right now. Please try again."); }
+    setLetterLoading(false);
+  };
+
+  const copyText = () => {
+    if(!result) return;
+    navigator.clipboard.writeText(resumeToPlainText(profile, result)).catch(()=>{});
+    setCopied(true); setTimeout(()=>setCopied(false),1500);
+  };
+
+  const copyLetterText = () => {
+    if(!letter) return;
+    const text = (letter.paragraphs||[]).join("\n\n");
+    navigator.clipboard.writeText(text).catch(()=>{});
+    setCopied(true); setTimeout(()=>setCopied(false),1500);
+  };
+
+  if(!ready) return <div className="min-h-screen flex items-center justify-center"><Loader label="Loading..."/></div>;
+
+  return (
+    <div style={{minHeight:"100vh"}}>
+      <div className="sticky top-0 z-10 bg-white border-b px-4 py-3" style={{borderColor:"var(--line)"}}>
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-display font-extrabold text-[13px]" style={{background:"var(--primary)"}}>R</div>
+            <span className="font-display font-extrabold text-[15px]">ATS Resume Builder</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <a href="/blog" className="text-[12px] font-bold" style={{color:"var(--primary)"}}>Blog</a>
+            <span className="text-[11px] font-bold px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)",color:"var(--accent-dark)"}}>Free prototype</span>
+          </div>
+        </div>
+        <div className="flex gap-2 overflow-x-auto">
+          {[["resume","Resume & Cover Letter"],["interview","Interview Prep"],["linkedin","LinkedIn"],["tracker","Application Tracker"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setSection(id)} className="px-3 py-1.5 rounded-lg text-[12.5px] font-bold whitespace-nowrap"
+              style={section===id?{background:"var(--primary-soft)",color:"var(--primary-dark)"}:{color:"var(--ink-soft)"}}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {section==="resume" && (
+      <div className="max-w-6xl mx-auto p-4 grid lg:grid-cols-2 gap-4">
+        <div>
+          <Card className="p-4">
+            <div className="font-display font-bold text-[15px] mb-3">Your details</div>
+            <ProfileForm profile={profile} setProfile={setProfile} level={level} setLevel={setLevel}/>
+          </Card>
+          <Card className="p-4 mt-4">
+            <div className="font-display font-bold text-[15px] mb-2">Target job description (optional)</div>
+            <TA rows={5} value={jd} onChange={e=>setJd(e.target.value)} placeholder="Paste a job description here to tailor your resume/cover letter and see keyword match..."/>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <Btn onClick={run} disabled={loading || !profile.name}>
+                {loading? <Loader label="Writing resume..."/> : "Generate Resume"}
+              </Btn>
+              <Btn variant="accent" onClick={runLetter} disabled={letterLoading || !profile.name}>
+                {letterLoading? <Loader label="Writing letter..."/> : "Generate Cover Letter"}
+              </Btn>
+            </div>
+            {error && <div className="mt-3 text-[12.5px] px-3 py-2 rounded-lg" style={{background:"var(--danger-soft)",color:"var(--danger)"}}>{error}</div>}
+            {letterError && <div className="mt-3 text-[12.5px] px-3 py-2 rounded-lg" style={{background:"var(--danger-soft)",color:"var(--danger)"}}>{letterError}</div>}
+          </Card>
+          <ResultPanel result={result} jd={jd}/>
+        </div>
+
+        <div>
+          <div className="flex gap-2 mb-3">
+            <button onClick={()=>setRightTab("resume")} className="px-4 py-2 rounded-lg text-[13px] font-bold border"
+              style={rightTab==="resume"?{background:"var(--primary)",color:"#fff",borderColor:"var(--primary)"}:{borderColor:"var(--line)"}}>Resume</button>
+            <button onClick={()=>setRightTab("letter")} className="px-4 py-2 rounded-lg text-[13px] font-bold border"
+              style={rightTab==="letter"?{background:"var(--primary)",color:"#fff",borderColor:"var(--primary)"}:{borderColor:"var(--line)"}}>Cover Letter</button>
+          </div>
+
+          {rightTab==="resume" && (result ? (
+            <>
+              <TemplatePicker template={template} setTemplate={setTemplate}/>
+              <div className="flex gap-2 mb-3 flex-wrap">
+                <Btn variant="secondary" onClick={copyText}>{copied?"✓ Copied":"Copy as text"}</Btn>
+                <Btn variant="secondary" onClick={()=>window.print()}>Print / Save as PDF</Btn>
+                <Btn variant="accent" disabled={docxBusy} onClick={async()=>{ setDocxBusy(true); try{ await downloadDocx(profile, result); }catch(e){} setDocxBusy(false); }}>
+                  {docxBusy? <Loader label="Preparing..."/> : "Download DOCX"}
+                </Btn>
+              </div>
+              <ResumeDoc profile={profile} result={result} template={template}/>
+            </>
+          ) : (
+            <Card className="p-10 text-center" style={{color:"var(--ink-soft)"}}>
+              <div className="text-[14px] font-semibold mb-1">Your resume preview will appear here</div>
+              <div className="text-[12.5px]">Fill your details on the left and click Generate Resume</div>
+            </Card>
+          ))}
+
+          {rightTab==="letter" && (letter ? (
+            <>
+              <div className="flex gap-2 mb-3 flex-wrap">
+                <Btn variant="secondary" onClick={copyLetterText}>{copied?"✓ Copied":"Copy as text"}</Btn>
+                <Btn variant="secondary" onClick={()=>window.print()}>Print / Save as PDF</Btn>
+                <Btn variant="accent" disabled={letterDocxBusy} onClick={async()=>{ setLetterDocxBusy(true); try{ await downloadLetterDocx(profile, letter); }catch(e){} setLetterDocxBusy(false); }}>
+                  {letterDocxBusy? <Loader label="Preparing..."/> : "Download DOCX"}
+                </Btn>
+              </div>
+              <CoverLetterDoc profile={profile} letter={letter}/>
+            </>
+          ) : (
+            <Card className="p-10 text-center" style={{color:"var(--ink-soft)"}}>
+              <div className="text-[14px] font-semibold mb-1">Your cover letter will appear here</div>
+              <div className="text-[12.5px]">Paste a job description above for best results, then click Generate Cover Letter</div>
+            </Card>
+          ))}
+        </div>
+      </div>
+      )}
+
+      {section==="interview" && (
+        <div className="max-w-3xl mx-auto p-4">
+          <div className="font-display font-extrabold text-[20px] mb-1">Interview Prep</div>
+          <div className="text-[12.5px] mb-4" style={{color:"var(--ink-soft)"}}>Uses the details and job description from the Resume tab. Fill those in first if you haven't.</div>
+          {!profile.name ? (
+            <Card className="p-10 text-center" style={{color:"var(--ink-soft)"}}>
+              <div className="text-[14px] font-semibold mb-1">Add your details first</div>
+              <div className="text-[12.5px]">Go to the "Resume & Cover Letter" tab and fill in your name and background</div>
+            </Card>
+          ) : <InterviewPrepPanel profile={profile} jd={jd} level={level}/>}
+        </div>
+      )}
+
+      {section==="linkedin" && (
+        <div className="max-w-3xl mx-auto p-4">
+          <div className="font-display font-extrabold text-[20px] mb-1">LinkedIn Optimizer</div>
+          <div className="text-[12.5px] mb-4" style={{color:"var(--ink-soft)"}}>Uses the details from the Resume tab.</div>
+          {!profile.name ? (
+            <Card className="p-10 text-center" style={{color:"var(--ink-soft)"}}>
+              <div className="text-[14px] font-semibold mb-1">Add your details first</div>
+              <div className="text-[12.5px]">Go to the "Resume & Cover Letter" tab and fill in your name and background</div>
+            </Card>
+          ) : <LinkedInPanel profile={profile} level={level}/>}
+        </div>
+      )}
+
+      {section==="tracker" && <TrackerPage/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
