@@ -13,6 +13,10 @@ export async function onRequestGet(context) {
   const staticUrls = [
     { loc: `${origin}/`, changefreq: 'monthly', priority: '1.0' },
     { loc: `${origin}/blog`, changefreq: 'weekly', priority: '0.8' },
+    { loc: `${origin}/privacy.html`, changefreq: 'yearly', priority: '0.2' },
+    { loc: `${origin}/terms.html`, changefreq: 'yearly', priority: '0.2' },
+    { loc: `${origin}/copyright.html`, changefreq: 'yearly', priority: '0.2' },
+    { loc: `${origin}/security.html`, changefreq: 'yearly', priority: '0.2' },
   ];
 
   let articleUrls = [];

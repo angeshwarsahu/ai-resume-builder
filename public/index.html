@@ -3,12 +3,17 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>ATS Resume Builder — AI Powered</title>
+<meta name="description" content="AI Work & Study Assistant for PDF tools, document AI, study, exams, office work and career tasks."/>
+<meta property="og:title" content="AI Work & Study Assistant"/>
+<meta property="og:description" content="PDF, documents, study, exams, office and career workflows in one workspace."/>
+<meta property="og:type" content="website"/>
+<title>AI Work & Study Assistant — Resume, PDF, Study & Office Tools</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&family=Merriweather:wght@400;700&family=Noto+Sans+Devanagari:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -85,6 +90,33 @@ async function sSet(key, value){
 }
 const uid = () => Math.random().toString(36).slice(2,10);
 
+const __scriptPromises = {};
+function loadExternalScript(key, src){
+  if(window[key]) return Promise.resolve(window[key]);
+  if(__scriptPromises[key]) return __scriptPromises[key];
+  __scriptPromises[key] = new Promise((resolve,reject)=>{
+    const existing=document.querySelector(`script[data-lazy-lib="${key}"]`);
+    if(existing){ existing.addEventListener("load",()=>resolve(window[key])); existing.addEventListener("error",()=>reject(new Error(`${key} could not be loaded.`))); return; }
+    const el=document.createElement("script"); el.src=src; el.async=true; el.dataset.lazyLib=key;
+    el.onload=()=>window[key]?resolve(window[key]):reject(new Error(`${key} loaded but is unavailable.`));
+    el.onerror=()=>reject(new Error(`${key} could not be loaded. Check your internet connection and try again.`));
+    document.head.appendChild(el);
+  });
+  return __scriptPromises[key];
+}
+async function ensurePDFLib(){return loadExternalScript("PDFLib","https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js");}
+async function ensureJSZip(){return loadExternalScript("JSZip","https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js");}
+async function ensureTesseract(){return loadExternalScript("Tesseract","https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");}
+async function ensureDocx(){return loadExternalScript("docx","https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js");}
+async function ensurePDFJS(){
+  if(window.__pdfjsLib) return window.__pdfjsLib;
+  if(window.__pdfjsPromise) return window.__pdfjsPromise;
+  window.__pdfjsPromise=import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs").then(m=>{window.__pdfjsLib=m;return m;}).catch(()=>{throw new Error("PDF reader could not be loaded. Check your internet connection and try again.");});
+  return window.__pdfjsPromise;
+}
+
+
+
 /* ---------------- AI (calls our own backend — no key in the browser) ---------------- */
 async function callBackend(path, payload){
   const res = await fetch(path, {
@@ -118,6 +150,12 @@ async function getInterviewFeedback({question, answer, targetRole}){
 async function optimizeLinkedIn({profile, level}){
   return await callBackend("/api/linkedin-optimize", { profile, level });
 }
+
+function saveJobHistory(entry){
+  try{const key="ai-job-history";const old=JSON.parse(localStorage.getItem(key)||"[]");const next=[{id:uid(),...entry,createdAt:new Date().toISOString()},...old].slice(0,10);localStorage.setItem(key,JSON.stringify(next));window.dispatchEvent(new Event("job-history-updated"));}catch{}
+}
+function getJobHistory(){try{return JSON.parse(localStorage.getItem("ai-job-history")||"[]")}catch{return[]}}
+function clearJobHistory(){try{localStorage.removeItem("ai-job-history");window.dispatchEvent(new Event("job-history-updated"));}catch{}}
 
 /* ---------------- UI kit ---------------- */
 function Btn({children,onClick,variant="primary",size="md",full,disabled,className=""}){
@@ -576,6 +614,7 @@ function resumeToPlainText(profile, result){
    screen preview and the plain-text copy, so all three exports always agree
    with each other — one place (getSectionOrder) decides the order for all. */
 async function downloadDocx(profile, result){
+  await ensureDocx();
   const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
   const order = getSectionOrder(result._level || "experienced");
   const children = [];
@@ -621,6 +660,7 @@ async function downloadDocx(profile, result){
 
 /* ---------------- DOCX export for cover letter (same library, same pattern) ---------------- */
 async function downloadLetterDocx(profile, letter){
+  await ensureDocx();
   const { Document, Packer, Paragraph, TextRun } = docx;
   const today = new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"});
   const children = [
@@ -640,7 +680,332 @@ async function downloadLetterDocx(profile, letter){
   URL.revokeObjectURL(url);
 }
 
+
+/* ---------------- AI Work Center + Browser PDF tools ---------------- */
+function downloadBlob(blob, filename){
+  const url=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function downloadBytes(bytes, filename, type="application/octet-stream"){
+  downloadBlob(new Blob([bytes],{type}),filename);
+}
+async function mergePdfFiles(files){
+  await ensurePDFLib();
+  if(!files.length) throw new Error("Select at least one PDF.");
+  const out=await PDFLib.PDFDocument.create();
+  for(const file of files){
+    const src=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+    const pages=await out.copyPages(src,src.getPageIndices()); pages.forEach(pg=>out.addPage(pg));
+  }
+  downloadBytes(await out.save(),"merged.pdf","application/pdf");
+}
+async function splitPdfFile(file){
+  await ensurePDFLib(); await ensureJSZip();
+  if(!file) throw new Error("Select a PDF.");
+  const src=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  const zip=new JSZip();
+  for(let i=0;i<src.getPageCount();i++){
+    const out=await PDFLib.PDFDocument.create(); const [pg]=await out.copyPages(src,[i]); out.addPage(pg);
+    zip.file(`page-${String(i+1).padStart(3,"0")}.pdf`,await out.save());
+  }
+  downloadBlob(await zip.generateAsync({type:"blob"}),"split-pages.zip","application/zip");
+}
+async function rotatePdfFile(file, degrees){
+  await ensurePDFLib();
+  if(!file) throw new Error("Select a PDF.");
+  const pdf=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  pdf.getPages().forEach(p=>p.setRotation(PDFLib.degrees((p.getRotation().angle+degrees)%360)));
+  downloadBytes(await pdf.save(),"rotated.pdf","application/pdf");
+}
+async function imagesToPdf(files){
+  await ensurePDFLib();
+  if(!files.length) throw new Error("Select one or more images.");
+  const pdf=await PDFLib.PDFDocument.create();
+  for(const file of files){
+    const bytes=await file.arrayBuffer(); let img;
+    if(file.type.includes("png")) img=await pdf.embedPng(bytes); else img=await pdf.embedJpg(bytes);
+    const maxW=595,maxH=842, scale=Math.min(maxW/img.width,maxH/img.height,1);
+    const page=pdf.addPage([maxW,maxH]); const w=img.width*scale,h=img.height*scale;
+    page.drawImage(img,{x:(maxW-w)/2,y:(maxH-h)/2,width:w,height:h});
+  }
+  downloadBytes(await pdf.save(),"images.pdf","application/pdf");
+}
+async function extractPdfText(file){
+  const pdfjs=await ensurePDFJS();
+  if(!file) throw new Error("Select a PDF.");
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise; let text=[];
+  for(let i=1;i<=pdf.numPages;i++){ const page=await pdf.getPage(i); const tc=await page.getTextContent(); text.push(`--- Page ${i} ---\n`+tc.items.map(x=>x.str).join(" ")); }
+  downloadBlob(new Blob([text.join("\n\n")],{type:"text/plain;charset=utf-8"}),"extracted-text.txt");
+}
+
+async function readPdfTextForAI(file,ocrLanguage="eng",onProgress){
+  const pdfjs=await ensurePDFJS();
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise; const pages=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i); const tc=await page.getTextContent(); const txt=tc.items.map(x=>x.str).join(" ").trim();
+    if(txt.length>=40){pages.push(`--- Page ${i} ---\n${txt}`); continue;}
+    const vp=page.getViewport({scale:1.35}); const canvas=document.createElement("canvas"); canvas.width=Math.ceil(vp.width); canvas.height=Math.ceil(vp.height);
+    await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+    const blob=await new Promise(r=>canvas.toBlob(r,"image/png"));
+    const ocr=await ocrImageFile(new File([blob],`page-${i}.png`,{type:"image/png"}),(x,status)=>onProgress&&onProgress(((i-1)+x)/pdf.numPages,status),ocrLanguage);
+    pages.push(`--- Page ${i} ---\n${ocr.trim()}`);
+    if(onProgress) onProgress(i/pdf.numPages,"page");
+  }
+  return pages.join("\n\n");
+}
+async function ocrImageFile(file, onProgress, language="eng"){
+  await ensureTesseract();
+  const lang = language === "hin" ? "hin" : language === "eng+hin" ? "eng+hin" : "eng";
+  const worker=await Tesseract.createWorker(lang,1,{logger:m=>{if(m.status&&typeof m.progress==='number')onProgress&&onProgress(m.progress,m.status);}});
+  try{ const r=await worker.recognize(file); return r.data.text||""; } finally { await worker.terminate(); }
+}
+async function ocrPdfFile(file,ocrLanguage="eng",onProgress){
+  const pdfjs=await ensurePDFJS();
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise; let out=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i); const vp=page.getViewport({scale:1.5}); const canvas=document.createElement("canvas"); canvas.width=Math.ceil(vp.width); canvas.height=Math.ceil(vp.height);
+    await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+    const result=await ocrImageFile(new File([await new Promise(r=>canvas.toBlob(r,"image/png"))],`page-${i}.png`,{type:"image/png"}),onProgress,ocrLanguage);
+    out.push(`--- Page ${i} ---\n${result}`);
+  }
+  return out.join("\n\n");
+}
+async function deletePdfPages(file, pageSpec){
+  await ensurePDFLib();
+  if(!file) throw new Error("Select a PDF.");
+  const pdf=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  const total=pdf.getPageCount();
+  const nums=parsePageSpec(pageSpec,total);
+  if(!nums.length) throw new Error("Enter pages such as 2 or 1,3,5-7.");
+  [...nums].sort((a,b)=>b-a).forEach(n=>pdf.removePage(n-1));
+  if(pdf.getPageCount()<1) throw new Error("At least one page must remain.");
+  const bytes=await pdf.save({useObjectStreams:true});
+  downloadBlob(new Blob([bytes],{type:"application/pdf"}),"pages-removed.pdf");
+}
+function parsePageSpec(spec,total){
+  const set=new Set();
+  String(spec||"").split(",").map(x=>x.trim()).filter(Boolean).forEach(part=>{
+    const m=part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if(m){let a=+m[1],b=+m[2]; if(a>b)[a,b]=[b,a]; for(let n=a;n<=b;n++) if(n>=1&&n<=total)set.add(n);}
+    else {const n=parseInt(part,10); if(n>=1&&n<=total)set.add(n);}
+  });
+  return [...set].sort((a,b)=>a-b);
+}
+async function extractPdfPages(file,pageSpec){
+  await ensurePDFLib();
+  if(!file) throw new Error("Select a PDF.");
+  const src=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  const nums=parsePageSpec(pageSpec,src.getPageCount());
+  if(!nums.length) throw new Error("Enter pages such as 2 or 1,3,5-7.");
+  const out=await PDFLib.PDFDocument.create();
+  const pages=await out.copyPages(src,nums.map(n=>n-1)); pages.forEach(p=>out.addPage(p));
+  const bytes=await out.save({useObjectStreams:true});
+  downloadBlob(new Blob([bytes],{type:"application/pdf"}),"selected-pages.pdf");
+}
+async function addPageNumbers(file){
+  await ensurePDFLib();
+  if(!file) throw new Error("Select a PDF.");
+  const pdf=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  const font=await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+  pdf.getPages().forEach((page,i)=>{const {width}=page.getSize(); const label=`${i+1} / ${pdf.getPageCount()}`; page.drawText(label,{x:width-70,y:18,size:9,font,color:PDFLib.rgb(0.25,0.25,0.25)});});
+  const bytes=await pdf.save({useObjectStreams:true});
+  downloadBlob(new Blob([bytes],{type:"application/pdf"}),"numbered-pages.pdf");
+}
+async function watermarkPdf(file,text){
+  await ensurePDFLib();
+  if(!file) throw new Error("Select a PDF.");
+  const label=String(text||"").trim(); if(!label) throw new Error("Enter watermark text.");
+  const pdf=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  const font=await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  pdf.getPages().forEach(page=>{const {width,height}=page.getSize(); const size=Math.max(22,Math.min(54,width/10)); const tw=font.widthOfTextAtSize(label,size); page.drawText(label,{x:(width-tw)/2,y:height/2,size,font,color:PDFLib.rgb(.55,.55,.55),opacity:.22,rotate:PDFLib.degrees(35)});});
+  const bytes=await pdf.save({useObjectStreams:true});
+  downloadBlob(new Blob([bytes],{type:"application/pdf"}),"watermarked.pdf");
+}
+async function rebuildPdf(file){
+  await ensurePDFLib();
+  if(!file) throw new Error("Select a PDF.");
+  const pdf=await PDFLib.PDFDocument.load(await file.arrayBuffer());
+  const bytes=await pdf.save({useObjectStreams:true,addDefaultPage:false});
+  downloadBlob(new Blob([bytes],{type:"application/pdf"}),"optimized.pdf");
+}
+async function pdfToJpgZip(file){
+  const pdfjs=await ensurePDFJS(); await ensureJSZip();
+  if(!file) throw new Error("Select a PDF.");
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise; const zip=new JSZip();
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i); const vp=page.getViewport({scale:1.5}); const canvas=document.createElement("canvas"); canvas.width=Math.ceil(vp.width); canvas.height=Math.ceil(vp.height);
+    await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+    const blob=await new Promise(r=>canvas.toBlob(r,"image/jpeg",.9)); zip.file(`page-${i}.jpg`,blob);
+  }
+  const out=await zip.generateAsync({type:"blob"}); downloadBlob(out,"pdf-pages-jpg.zip");
+}
+
+function VerificationBox({source,answer}){
+  if(!answer) return null;
+  const hasNumbers=/\b\d{2,}\b/.test(answer);
+  return <Card className="p-3 mt-3" style={{background:'#F8FAFC'}}>
+    <div className="text-[12px] font-bold">🔎 Quick verification</div>
+    <div className="text-[11.5px] mt-1" style={{color:'var(--ink-soft)'}}>यह check AI की जगह final proof नहीं है। महत्वपूर्ण facts, dates, amounts और exam information को source से मिलाएँ।</div>
+    <div className="flex flex-wrap gap-2 mt-2 text-[11px]"><span className="px-2 py-1 rounded-full" style={{background:'var(--accent-soft)',color:'var(--accent-dark)'}}>Source-grounded: {source?'Yes':'No source supplied'}</span>{hasNumbers&&<span className="px-2 py-1 rounded-full" style={{background:'#FFF7ED',color:'#9A3412'}}>Numbers detected — recheck</span>}<span className="px-2 py-1 rounded-full" style={{background:'#EEF2FF',color:'#3730A3'}}>AI output — review before use</span></div>
+  </Card>;
+}
+
+function DocumentRobot(){
+  const [files,setFiles]=useState([]), [mode,setMode]=useState("summary"), [question,setQuestion]=useState("");
+  const [language,setLanguage]=useState("same as source"), [ocrLanguage,setOcrLanguage]=useState("eng");
+  const [text,setText]=useState(""), [answer,setAnswer]=useState(""), [verify,setVerify]=useState(null);
+  const [busy,setBusy]=useState(false), [progress,setProgress]=useState(0), [error,setError]=useState("");
+  const [savedSets,setSavedSets]=useState(()=>{try{return JSON.parse(localStorage.getItem("document-workspaces")||"[]")}catch{return[]}});
+  const load=async()=>{if(!files.length)return;setBusy(true);setError("");setAnswer("");setVerify(null);setProgress(0);try{let all=[];for(const f of files){if(f.type==="application/pdf")all.push(`===== ${f.name} =====\n${await readPdfTextForAI(f,ocrLanguage,(x)=>setProgress(Math.round(x*100)))}`);else if(f.type.startsWith("text/"))all.push(`===== ${f.name} =====\n${await f.text()}`);else if(f.type.startsWith("image/"))all.push(`===== ${f.name} =====\n${await ocrImageFile(f,(x)=>setProgress(Math.round(x*100)),ocrLanguage)}`);else throw new Error(`${f.name}: this file type is not supported yet.`);}setText(all.join("\n\n").slice(0,50000));}catch(e){setError(e.message||"Could not read the files.");}setBusy(false);};
+  const runAI=async()=>{if(!text.trim())return;setBusy(true);setError("");setAnswer("");setVerify(null);try{const r=await postJSON('/api/document-assistant',{mode,question,language,documents:text});setAnswer(r.answer||r.text||"");saveJobHistory({title:(question||mode)+" — "+files.map(f=>f.name).join(", ").slice(0,55),workspace:"documents"});}catch(e){setError(e.message||"AI could not complete this right now.");}setBusy(false);};
+  const verifyAnswer=async()=>{if(!text||!answer)return;setBusy(true);setError("");try{setVerify(await postJSON('/api/verify',{source:text,answer}));}catch(e){setError(e.message||"Verification could not be completed.");}setBusy(false);};
+  const saveWorkspace=()=>{if(!text)return;const item={id:uid(),name:files.map(f=>f.name).join(", ").slice(0,120)||"Document workspace",text,savedAt:new Date().toISOString()};const next=[item,...savedSets].slice(0,8);setSavedSets(next);localStorage.setItem("document-workspaces",JSON.stringify(next));};
+  const openWorkspace=(item)=>{setText(item.text);setFiles([]);setAnswer("");setVerify(null);};
+  return <div className="max-w-5xl mx-auto p-4"><div className="font-display font-extrabold text-[22px]">📚 Document Robot</div><div className="text-[13px] mt-1 mb-4" style={{color:'var(--ink-soft)'}}>कई files को एक workspace में पढ़ो, AI से काम कराओ और final answer को source से verify करो।</div>
+  <Card className="p-4"><input type="file" multiple accept="application/pdf,text/plain,image/png,image/jpeg" onChange={e=>setFiles([...e.target.files])} className="text-[12px] w-full"/>
+  <div className="grid md:grid-cols-4 gap-3 mt-3"><div><label className="text-[12px] font-bold">काम</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="summary">Summary</option><option value="qa">Ask questions</option><option value="key_points">Key points</option><option value="action_items">Action items</option><option value="translate">Translate</option><option value="mcq">Create MCQs</option><option value="study_notes">Study notes</option></select></div><div><label className="text-[12px] font-bold">Answer language</label><select value={language} onChange={e=>setLanguage(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option>same as source</option><option>Hindi</option><option>English</option><option>Hinglish</option></select></div><div><label className="text-[12px] font-bold">OCR language</label><select value={ocrLanguage} onChange={e=>setOcrLanguage(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="eng">English</option><option value="hin">Hindi</option><option value="eng+hin">English + Hindi</option></select></div><div><label className="text-[12px] font-bold">Question</label><input value={question} onChange={e=>setQuestion(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1" placeholder="क्या देखना है?"/></div></div>
+  <div className="flex flex-wrap gap-2 mt-3"><Btn onClick={load} disabled={busy||!files.length}>{busy?"Reading…":"Read files"}</Btn>{text&&<><Btn variant="secondary" onClick={()=>downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}),"document-text.txt")}>Save text</Btn><Btn variant="secondary" onClick={saveWorkspace}>Save workspace</Btn></>}</div>
+  {progress>0&&progress<100&&<div className="text-[11px] mt-2" style={{color:'var(--ink-soft)'}}>OCR: {progress}%</div>}
+  {text&&<div className="mt-3 text-[11px] rounded-lg p-3 max-h-40 overflow-auto" style={{background:'#F7F8F7',color:'var(--ink-soft)'}}>{text.slice(0,5000)}{text.length>5000?' …':''}</div>}
+  {text&&<Btn className="mt-3" onClick={runAI} disabled={busy}>{busy?<Loader label="Analyzing…"/>:'Analyze document'}</Btn>}
+  {error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}
+  {answer&&<div className="mt-4 rounded-xl border p-4 whitespace-pre-wrap text-[13px] leading-6" style={{borderColor:'var(--line)',background:'#fff'}}><div className="font-bold mb-2">AI result</div>{answer}<div className="mt-3"><Btn variant="secondary" size="sm" onClick={verifyAnswer} disabled={busy}>{busy?'Checking…':'🔎 Verify against source'}</Btn></div></div>}
+  {verify&&<Card className="mt-3 p-4"><div className="font-bold">Verification: {verify.status}</div>{verify.issues?.length>0&&<div className="mt-2"><div className="text-[12px] font-bold">Issues</div>{verify.issues.map((x,i)=><div key={i} className="text-[12px] mt-1">• {x}</div>)}</div>}{verify.corrections?.length>0&&<div className="mt-2"><div className="text-[12px] font-bold">Corrections</div>{verify.corrections.map((x,i)=><div key={i} className="text-[12px] mt-1">• {x}</div>)}</div>}<div className="text-[11px] mt-2" style={{color:'var(--ink-soft)'}}>यह verification भी source-based AI check है; critical information को original source से मिलाना सबसे सुरक्षित है।</div></Card>}
+  </Card>
+  {savedSets.length>0&&<div className="mt-5"><div className="font-bold text-[14px] mb-2">Saved workspaces</div><div className="grid md:grid-cols-2 gap-2">{savedSets.map(x=><Card key={x.id} className="p-3"><div className="font-semibold text-[13px]">{x.name}</div><div className="text-[10.5px] mt-1" style={{color:'var(--ink-soft)'}}>{new Date(x.savedAt).toLocaleString()}</div><Btn variant="secondary" size="sm" className="mt-2" onClick={()=>openWorkspace(x)}>Open</Btn></Card>)}</div></div>}
+  </div>;
+}
+function PDFOrganizer(){
+  const [file,setFile]=useState(null),[pages,setPages]=useState([]),[selected,setSelected]=useState(new Set()),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const load=async(f)=>{if(!f)return;setFile(f);setError("");setBusy(true);try{const pdfjs=await ensurePDFJS();const pdf=await pdfjs.getDocument({data:await f.arrayBuffer()}).promise;const arr=[];for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);const vp=page.getViewport({scale:.28});const canvas=document.createElement("canvas");canvas.width=Math.ceil(vp.width);canvas.height=Math.ceil(vp.height);await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;arr.push({n:i,rotation:0,data:canvas.toDataURL("image/jpeg",.78)});}setPages(arr);setSelected(new Set());}catch(e){setError(e.message||"Could not preview PDF.");}setBusy(false)};
+  const toggle=n=>setSelected(prev=>{const x=new Set(prev);x.has(n)?x.delete(n):x.add(n);return x});
+  const move=(idx,dir)=>setPages(prev=>{const a=[...prev],j=idx+dir;if(j<0||j>=a.length)return a;[a[idx],a[j]]=[a[j],a[idx]];return a});
+  const rotate=(idx)=>setPages(prev=>prev.map((x,i)=>i===idx?{...x,rotation:(x.rotation+90)%360}:x));
+  const exportPdf=async()=>{if(!file||!pages.length)return;setBusy(true);setError("");try{await ensurePDFLib();const src=await PDFLib.PDFDocument.load(await file.arrayBuffer());const out=await PDFLib.PDFDocument.create();const order=pages.filter(x=>!selected.has(x.n));if(!order.length)throw new Error("At least one page must remain.");for(const item of order){const [p]=await out.copyPages(src,[item.n-1]);p.setRotation(PDFLib.degrees(item.rotation));out.addPage(p);}const bytes=await out.save({useObjectStreams:true});downloadBlob(new Blob([bytes],{type:"application/pdf"}),"organized.pdf");}catch(e){setError(e.message||"Could not create PDF.");}setBusy(false)};
+  return <Card className="p-4 mb-5" style={{background:"#fff"}}><div className="font-bold">🗂️ PDF Preview & Organize</div><div className="text-[12px] mt-1 mb-3" style={{color:"var(--ink-soft)"}}>Pages को देखें, चुनें, ऊपर/नीचे करें, rotate करें और नया PDF बनाएं।</div><input type="file" accept="application/pdf" onChange={e=>load(e.target.files[0])} className="text-[12px] w-full"/>{busy&&<div className="mt-3"><Loader label="PDF तैयार हो रहा है…"/></div>}{pages.length>0&&<><div className="flex flex-wrap gap-2 mt-3"><Btn size="sm" variant="secondary" onClick={()=>setSelected(new Set(pages.map(x=>x.n)))}>Select all</Btn><Btn size="sm" variant="secondary" onClick={()=>setSelected(new Set())}>Clear</Btn><Btn size="sm" onClick={exportPdf} disabled={busy||!pages.length}>Create organized PDF</Btn><span className="text-[11px] self-center" style={{color:'var(--ink-soft)'}}>{selected.size} page(s) marked for removal</span></div><div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mt-4">{pages.map((p,i)=><div key={p.n} className="border rounded-xl p-2" style={{borderColor:selected.has(p.n)?'var(--primary)':'var(--line)',background:selected.has(p.n)?'var(--primary-soft)':'#fff'}}><img src={p.data} alt={`Page ${p.n}`} className="w-full rounded border" style={{transform:`rotate(${p.rotation}deg)`}}/><div className="text-[11px] font-bold mt-1">Page {p.n}</div><div className="flex gap-1 mt-2"><button className="px-2 py-1 rounded border text-[11px]" onClick={()=>toggle(p.n)}>{selected.has(p.n)?'Keep':'Remove'}</button><button className="px-2 py-1 rounded border text-[11px]" onClick={()=>rotate(i)}>↻</button><button className="px-2 py-1 rounded border text-[11px]" onClick={()=>move(i,-1)}>↑</button><button className="px-2 py-1 rounded border text-[11px]" onClick={()=>move(i,1)}>↓</button></div></div>)}</div></>}{error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}</Card>;
+}
+
+function PDFTools(){
+  const [files,setFiles]=useState([]),[single,setSingle]=useState(null),[busy,setBusy]=useState(false),[msg,setMsg]=useState(null);
+  const [pageSpec,setPageSpec]=useState(""); const [watermark,setWatermark]=useState("CONFIDENTIAL");
+  const run=async(fn)=>{setBusy(true);setMsg(null);try{await fn();setMsg({ok:true,t:"Done. Your file has been prepared."});}catch(e){setMsg({ok:false,t:e.message||"Could not complete this operation."});}finally{setBusy(false);}};
+  const pickSingle=e=>setSingle(e.target.files[0]||null);
+  return <div className="max-w-6xl mx-auto p-4">
+    <PDFOrganizer/>
+    <div className="mb-5"><div className="font-display font-extrabold text-[22px]">PDF Super Center</div><div className="text-[13px]" style={{color:"var(--ink-soft)"}}>Fast browser-side PDF tools. Your files stay on your device for these operations.</div></div>
+    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <Card className="p-4"><div className="font-bold mb-1">Merge PDFs</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Combine multiple PDFs into one.</div><input type="file" accept="application/pdf" multiple onChange={e=>setFiles([...e.target.files])} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!files.length} onClick={()=>run(()=>mergePdfFiles(files))}>Merge PDFs</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Split PDF</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Create one PDF per page in a ZIP.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!single} onClick={()=>run(()=>splitPdfFile(single))}>Split PDF</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Rotate PDF</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Rotate every page.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><div className="grid grid-cols-3 gap-2 mt-3">{[90,180,270].map(d=><Btn key={d} variant="secondary" disabled={busy||!single} onClick={()=>run(()=>rotatePdfFile(single,d))}>{d}°</Btn>)}</div></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Images → PDF</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Turn JPG/PNG images into a PDF.</div><input type="file" accept="image/jpeg,image/png" multiple onChange={e=>setFiles([...e.target.files])} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!files.length} onClick={()=>run(()=>imagesToPdf(files))}>Create PDF</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Extract PDF text</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Extract selectable text to TXT.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!single} onClick={()=>run(()=>extractPdfText(single))}>Extract text</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Remove pages</div><div className="text-[12px] mb-2" style={{color:"var(--ink-soft)"}}>Example: 2, 5-7</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><TI value={pageSpec} onChange={e=>setPageSpec(e.target.value)} placeholder="Pages to remove" className="mt-2"/><Btn full className="mt-3" disabled={busy||!single||!pageSpec.trim()} onClick={()=>run(()=>deletePdfPages(single,pageSpec))}>Remove pages</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Extract selected pages</div><div className="text-[12px] mb-2" style={{color:"var(--ink-soft)"}}>Save only the pages you need.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><TI value={pageSpec} onChange={e=>setPageSpec(e.target.value)} placeholder="Pages: 1,3,5-8" className="mt-2"/><Btn full className="mt-3" disabled={busy||!single||!pageSpec.trim()} onClick={()=>run(()=>extractPdfPages(single,pageSpec))}>Extract pages</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Page numbers</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Add a simple page counter.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!single} onClick={()=>run(()=>addPageNumbers(single))}>Add page numbers</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Watermark</div><div className="text-[12px] mb-2" style={{color:"var(--ink-soft)"}}>Add light text across every page.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><TI value={watermark} onChange={e=>setWatermark(e.target.value)} placeholder="Watermark text" className="mt-2"/><Btn full className="mt-3" disabled={busy||!single||!watermark.trim()} onClick={()=>run(()=>watermarkPdf(single,watermark))}>Add watermark</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">PDF → JPG</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Render every page as a JPG and package them in a ZIP.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!single} onClick={()=>run(()=>pdfToJpgZip(single))}>Convert to JPG</Btn></Card>
+      <Card className="p-4"><div className="font-bold mb-1">Rebuild PDF</div><div className="text-[12px] mb-3" style={{color:"var(--ink-soft)"}}>Re-save the PDF with compact object streams. This is not guaranteed image compression.</div><input type="file" accept="application/pdf" onChange={pickSingle} className="text-[12px] w-full"/><Btn full className="mt-3" disabled={busy||!single} onClick={()=>run(()=>rebuildPdf(single))}>Rebuild PDF</Btn></Card>
+      <Card className="p-4" style={{background:"var(--primary-soft)"}}><div className="font-bold mb-1">AI PDF workspace</div><div className="text-[12px]" style={{color:"var(--ink-soft)"}}>Use Document Robot for summaries, Q&A, study notes, MCQs, translation and OCR.</div><Btn variant="secondary" size="sm" className="mt-3" onClick={()=>window.dispatchEvent(new CustomEvent("navigate-app",{detail:"documents"}))}>Open Document Robot</Btn></Card>
+    </div>
+    {msg&&<div className="mt-4 px-3 py-2 rounded-lg text-[12.5px]" style={{background:msg.ok?"var(--accent-soft)":"var(--danger-soft)",color:msg.ok?"var(--accent-dark)":"var(--danger)"}}>{msg.t}</div>}
+  </div>;
+}
+function CommandCenter({onNavigate}){
+  const [q,setQ]=useState(""); const [busy,setBusy]=useState(false); const [reply,setReply]=useState("");
+  const go=()=>{const x=q.toLowerCase();setReply("");setBusy(true);setTimeout(()=>{setBusy(false);
+    if(/ocr|summary|summarize|translate|question.*pdf|pdf.*question|document.*read|document.*understand|mcq.*pdf/.test(x)){onNavigate("documents");setReply("Document Robot खोल दिया है।");}
+    else if(/pdf|document|merge|split|rotate|extract/.test(x)){onNavigate("pdf");setReply("PDF tools खोल दिए हैं।");}
+    else if(/resume|cv|cover letter|job|ats/.test(x)){onNavigate("resume");setReply("Job & Resume workspace खोल दिया है।");}
+    else if(/interview|mock/.test(x)){onNavigate("interview");setReply("Interview practice खोल दिया है।");}
+    else if(/study|पढ़|quiz|notes|exam|question/.test(x)){onNavigate("study");setReply("Study Robot खोल दिया है।");}
+    else if(/office|email|mail|report|meeting|minutes/.test(x)){onNavigate("office");setReply("Office Robot खोल दिया है।");}
+    else if(/linkedin/.test(x)){onNavigate("linkedin");setReply("LinkedIn optimizer खोल दिया है।");}
+    else if(/track|application/.test(x)){onNavigate("tracker");setReply("Application tracker खोल दिया है।");}
+    else {setReply("मैं आपके काम के हिसाब से PDF, Resume, Interview, LinkedIn, Tracker, Study और Office workflows खोल सकता हूँ।");}
+  },180)};
+  return <Card className="p-5 mb-5" style={{background:"linear-gradient(135deg,#fff,#F1F5F9)"}}>
+    <div className="flex items-start gap-3"><div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-display font-extrabold" style={{background:"var(--primary)"}}>AI</div><div className="flex-1"><div className="font-display font-extrabold text-[18px]">आप क्या करना चाहते हैं?</div><div className="text-[12.5px] mt-1 mb-3" style={{color:"var(--ink-soft)"}}>सीधे अपना काम लिखें। उदाहरण: “PDF merge करनी है”, “resume बनाना है”, “interview practice चाहिए”.</div><div className="flex gap-2"><input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} className="flex-1 border rounded-lg px-3 py-2.5 text-[13px] outline-none" style={{borderColor:"var(--line)"}} placeholder="मेरा काम है…"/><Btn onClick={go} disabled={!q.trim()||busy}>{busy?"समझ रहा हूँ…":"Start"}</Btn></div>{reply&&<div className="mt-3 text-[12.5px] font-semibold" style={{color:"var(--primary)"}}>{reply}</div>}</div></div>
+  </Card>;
+}
+
+
+function StudyRobot(){
+ const [mode,setMode]=useState('explain'); const [topic,setTopic]=useState(''); const [level,setLevel]=useState('Class 5'); const [text,setText]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
+ const run=async()=>{if(!topic.trim()&&!text.trim())return;setBusy(true);setError('');setText('');try{const r=await postJSON('/api/study-assistant',{mode,level,topic,source:text});setText(r.answer||r.text||'');}catch(e){setError(e.message||'AI could not complete this right now.');}setBusy(false)};
+ return <div className="max-w-4xl mx-auto p-4"><div className="font-display font-extrabold text-[22px]">🎓 Study Robot</div><div className="text-[13px] mt-1 mb-4" style={{color:'var(--ink-soft)'}}>कठिन चीज़ को आसान भाषा में समझो, notes बनाओ और practice करो।</div>
+ <Card className="p-4"><div className="grid md:grid-cols-2 gap-3"><div><label className="text-[12px] font-bold">आपका level</label><select value={level} onChange={e=>setLevel(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option>Class 5</option><option>Class 6–8</option><option>Class 9–10</option><option>Class 11–12</option><option>College</option><option>Competitive Exam</option></select></div><div><label className="text-[12px] font-bold">काम</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="explain">आसान भाषा में समझाओ</option><option value="notes">Short notes बनाओ</option><option value="quiz">MCQ quiz बनाओ</option><option value="revision">Revision plan बनाओ</option><option value="questions">Practice questions बनाओ</option></select></div></div>
+ <input value={topic} onChange={e=>setTopic(e.target.value)} className="w-full border rounded-lg px-3 py-2.5 mt-3" placeholder="Topic लिखें — जैसे Photosynthesis, Algebra, Indian Polity..."/>
+ <textarea value={text} onChange={e=>setText(e.target.value)} className="w-full border rounded-lg px-3 py-2.5 mt-3" rows="5" placeholder="अगर आपके पास notes/text है तो यहाँ paste करें (optional)"/>
+ <Btn className="mt-3" onClick={run} disabled={busy||(!topic.trim()&&!text.trim())}>{busy?<Loader label="तैयार कर रहा हूँ…"/>:'Start Study Robot'}</Btn>
+ {error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}
+ {text&&<div className="mt-4 rounded-xl border p-4 whitespace-pre-wrap text-[13px] leading-6" style={{borderColor:'var(--line)',background:'#fff'}}>{text}</div>}
+ </Card></div>
+}
+function ExamRobot(){
+ const [mode,setMode]=useState('mcq'); const [exam,setExam]=useState(''); const [topic,setTopic]=useState(''); const [level,setLevel]=useState('beginner'); const [source,setSource]=useState(''); const [result,setResult]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
+ const run=async()=>{if(!exam.trim()&&!topic.trim()&&!source.trim())return;setBusy(true);setError('');setResult('');try{const r=await postJSON('/api/exam-assistant',{mode,exam,topic,level,source});setResult(r.answer||r.text||'');}catch(e){setError(e.message||'AI could not complete this right now.');}setBusy(false)};
+ return <div className="max-w-5xl mx-auto p-4"><div className="font-display font-extrabold text-[22px]">📝 Exam Robot</div><div className="text-[13px] mt-1 mb-4" style={{color:'var(--ink-soft)'}}>Competitive exams और school/college preparation के लिए practice, revision और strategy।</div>
+ <Card className="p-4"><div className="grid md:grid-cols-3 gap-3"><div><label className="text-[12px] font-bold">काम</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="mcq">MCQ practice</option><option value="mock_test">Mini mock test</option><option value="explain">Topic explanation</option><option value="revision">Revision plan</option><option value="strategy">Exam strategy</option><option value="questions">Practice questions</option></select></div><div><label className="text-[12px] font-bold">Exam / class</label><TI value={exam} onChange={e=>setExam(e.target.value)} placeholder="SSC, Banking, Class 10…" className="mt-1"/></div><div><label className="text-[12px] font-bold">Level</label><select value={level} onChange={e=>setLevel(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="beginner">Beginner</option><option value="school">School</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></div></div>
+ <TI value={topic} onChange={e=>setTopic(e.target.value)} placeholder="Topic — जैसे भारतीय संविधान, प्रतिशत, विज्ञान…" className="mt-3"/><TA rows={7} value={source} onChange={e=>setSource(e.target.value)} placeholder="अगर syllabus/notes/question paper है तो यहाँ text paste करें (optional)" className="mt-3"/><Btn className="mt-3" onClick={run} disabled={busy||(!exam.trim()&&!topic.trim()&&!source.trim())}>{busy?<Loader label="तैयार कर रहा हूँ…"/>:'Start Exam Robot'}</Btn>
+ {error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}
+ {result&&<div className="mt-4 rounded-xl border p-4 whitespace-pre-wrap text-[13px] leading-6" style={{borderColor:'var(--line)',background:'#fff'}}>{result}</div>}
+ </Card></div>
+}
+
+function OfficeRobot(){
+ const [mode,setMode]=useState('email'); const [instruction,setInstruction]=useState(''); const [source,setSource]=useState(''); const [result,setResult]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
+ const run=async()=>{if(!instruction.trim()&&!source.trim())return;setBusy(true);setError('');setResult('');try{const r=await postJSON('/api/office-assistant',{mode,instruction,source});setResult(r.answer||r.text||'');}catch(e){setError(e.message||'AI could not complete this right now.');}setBusy(false)};
+ return <div className="max-w-4xl mx-auto p-4"><div className="font-display font-extrabold text-[22px]">💼 Office Robot</div><div className="text-[13px] mt-1 mb-4" style={{color:'var(--ink-soft)'}}>Email, summary, action items, report और document work एक जगह।</div>
+ <Card className="p-4"><label className="text-[12px] font-bold">काम चुनें</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="email">Professional email draft</option><option value="summary">Document summary</option><option value="action_items">Action items निकालो</option><option value="report">Report draft</option><option value="rewrite">Professional rewrite</option><option value="minutes">Meeting minutes</option></select>
+ <textarea value={instruction} onChange={e=>setInstruction(e.target.value)} className="w-full border rounded-lg px-3 py-2.5 mt-3" rows="3" placeholder="क्या चाहिए? जैसे: manager को leave request की email बनाओ"/>
+ <textarea value={source} onChange={e=>setSource(e.target.value)} className="w-full border rounded-lg px-3 py-2.5 mt-3" rows="7" placeholder="Source text / meeting notes / rough draft यहाँ paste करें"/>
+ <Btn className="mt-3" onClick={run} disabled={busy||(!instruction.trim()&&!source.trim())}>{busy?<Loader label="तैयार कर रहा हूँ…"/>:'Start Office Robot'}</Btn>
+ {error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}
+ {result&&<div className="mt-4 rounded-xl border p-4 whitespace-pre-wrap text-[13px] leading-6" style={{borderColor:'var(--line)'}}>{result}</div>}
+ </Card></div>
+}
+
+function CareerRobot(){
+ const [mode,setMode]=useState('match'); const [role,setRole]=useState(''); const [jd,setJd]=useState(''); const [profile,setProfile]=useState(''); const [result,setResult]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
+ const run=async()=>{if(!role.trim()&&!jd.trim()&&!profile.trim())return;setBusy(true);setError('');setResult('');try{const r=await postJSON('/api/career-assistant',{mode,role,jd,profile});setResult(r.answer||r.text||'');}catch(e){setError(e.message||'AI could not complete this right now.');}setBusy(false)};
+ return <div className="max-w-5xl mx-auto p-4"><div className="font-display font-extrabold text-[22px]">🚀 Career Robot</div><div className="text-[13px] mt-1 mb-4" style={{color:'var(--ink-soft)'}}>Job description समझो, skill gaps पहचानो, resume/interview की तैयारी करो और next steps पाओ।</div>
+ <Card className="p-4"><div className="grid md:grid-cols-2 gap-3"><div><label className="text-[12px] font-bold">काम</label><select value={mode} onChange={e=>setMode(e.target.value)} className="w-full border rounded-lg px-3 py-2 mt-1"><option value="match">JD vs profile match</option><option value="gap">Skill gap analysis</option><option value="resume">Resume improvement plan</option><option value="interview">Interview preparation</option><option value="cover">Cover letter brief</option><option value="roadmap">Career roadmap</option></select></div><div><label className="text-[12px] font-bold">Target role</label><TI value={role} onChange={e=>setRole(e.target.value)} placeholder="Data Analyst, Teacher, Clerk…"/></div></div>
+ <TA rows={7} value={jd} onChange={e=>setJd(e.target.value)} placeholder="Job description / vacancy details यहाँ paste करें" className="mt-3"/><TA rows={6} value={profile} onChange={e=>setProfile(e.target.value)} placeholder="अपनी skills, education, experience या resume text यहाँ paste करें" className="mt-3"/><Btn className="mt-3" onClick={run} disabled={busy||(!role.trim()&&!jd.trim()&&!profile.trim())}>{busy?<Loader label="Career plan बना रहा हूँ…"/>:'Start Career Robot'}</Btn>
+ {error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}{result&&<div className="mt-4 rounded-xl border p-4 whitespace-pre-wrap text-[13px] leading-6">{result}</div>}{result&&<VerificationBox source={jd||profile} answer={result}/>}</Card></div>
+}
+
+function RobotMode({onNavigate}){
+ const [task,setTask]=useState(''); const [result,setResult]=useState(null); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
+ const run=async()=>{if(!task.trim())return;setBusy(true);setError('');setResult(null);try{const r=await postJSON('/api/robot',{task});setResult(r);saveJobHistory({title:task.slice(0,90),workspace:r.workspace||"robot"});}catch(e){setError(e.message||'Robot could not plan this task.');}setBusy(false)};
+ const open=()=>{if(result?.route) onNavigate(result.route); else if(result?.workspace) onNavigate(result.workspace);};
+ return <div className="max-w-5xl mx-auto p-4"><div className="font-display font-extrabold text-[22px]">🤖 Robot Mode</div><div className="text-[13px] mt-1 mb-4" style={{color:'var(--ink-soft)'}}>एक ही जगह अपना पूरा काम लिखें। Robot पहले काम को छोटे steps में तोड़ेगा, सही workspace चुनेगा और verification points बताएगा।</div>
+ <Card className="p-4"><TA rows={5} value={task} onChange={e=>setTask(e.target.value)} placeholder="जैसे: इस PDF से important points निकालो, फिर 10 MCQ बनाओ और revision plan तैयार करो"/><div className="flex gap-2 mt-3"><Btn onClick={run} disabled={busy||!task.trim()}>{busy?<Loader label="Task समझ रहा हूँ…"/>:'Plan my task'}</Btn>{(result?.route||result?.workspace)&&<Btn variant="secondary" onClick={open}>Open workspace</Btn>}</div>
+ {error&&<div className="mt-3 px-3 py-2 rounded-lg text-[12px]" style={{background:'var(--danger-soft)',color:'var(--danger)'}}>{error}</div>}
+ {result&&<div className="mt-4 grid md:grid-cols-3 gap-3"><Card className="p-3"><div className="text-[11px] font-bold">WORKSPACE</div><div className="font-bold mt-1">{result.workspace}</div><div className="text-[11.5px] mt-1" style={{color:'var(--ink-soft)'}}>{result.reason}</div></Card><Card className="p-3 md:col-span-2"><div className="text-[11px] font-bold mb-2">PLAN</div>{(result.steps||[]).map((x,i)=><div key={i} className="flex gap-2 text-[12px] py-1.5"><span className="font-bold">{i+1}.</span><span>{x}</span></div>)}</Card></div>}
+ {result&&<VerificationBox source={task} answer={(result.steps||[]).join(' ')}/>}</Card></div>
+}
+
+function JobHistory(){
+ const [items,setItems]=useState(getJobHistory());useEffect(()=>{const h=()=>setItems(getJobHistory());window.addEventListener("job-history-updated",h);return()=>window.removeEventListener("job-history-updated",h)},[]);
+ if(!items.length)return null; return <Card className="p-4 mt-5"><div className="flex items-center justify-between"><div className="font-bold">🕘 Recent AI work</div><button className="text-[11px] font-bold" style={{color:'var(--danger)'}} onClick={clearJobHistory}>Clear history</button></div><div className="grid md:grid-cols-2 gap-2 mt-3">{items.map(x=><div key={x.id} className="border rounded-lg p-3"><div className="font-semibold text-[12px]">{x.title}</div><div className="text-[11px] mt-1" style={{color:'var(--ink-soft)'}}>{x.workspace} · {new Date(x.createdAt).toLocaleString()}</div></div>)}</div></Card>
+}
+
 /* ---------------- App ---------------- */
+async function postJSON(url, body){
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),60000);
+  try{
+    const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),signal:controller.signal});
+    const text=await r.text(); let j={}; try{j=text?JSON.parse(text):{};}catch{}
+    if(!r.ok||j.success===false) throw new Error(j.message||(r.status===429?"Too many requests. Please wait a moment and try again.":`Request failed (${r.status}).`));
+    return j.data||j;
+  }catch(e){
+    if(e.name==='AbortError') throw new Error("इस काम में अपेक्षा से ज्यादा समय लग रहा है। थोड़ी देर बाद फिर कोशिश करें या file छोटी करके चलाएँ।");
+    if(e instanceof TypeError) throw new Error("Internet connection या server response में समस्या आई। कृपया फिर कोशिश करें।");
+    throw e;
+  }finally{clearTimeout(timer);}
+}
+
 function App(){
   const [ready,setReady] = useState(false);
   const [level,setLevel] = useState("fresher");
@@ -660,7 +1025,8 @@ function App(){
   const [letterError,setLetterError] = useState(null);
   const [docxBusy,setDocxBusy] = useState(false);
   const [letterDocxBusy,setLetterDocxBusy] = useState(false);
-  const [section,setSection] = useState("resume");
+  const [section,setSection] = useState("home");
+  useEffect(()=>{ const h=e=>setSection(e.detail); window.addEventListener("navigate-app",h); return()=>window.removeEventListener("navigate-app",h); },[]);
 
   useEffect(()=>{ (async ()=>{
     const p = await sGet("resume-profile", null);
@@ -716,7 +1082,7 @@ function App(){
     setCopied(true); setTimeout(()=>setCopied(false),1500);
   };
 
-  if(!ready) return <div className="min-h-screen flex items-center justify-center"><Loader label="Loading..."/></div>;
+  if(!ready) return <div className="min-h-screen flex items-center justify-center"><Loader label="Workspace तैयार हो रहा है…"/></div>;
 
   return (
     <div style={{minHeight:"100vh"}}>
@@ -724,20 +1090,30 @@ function App(){
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-display font-extrabold text-[13px]" style={{background:"var(--primary)"}}>R</div>
-            <span className="font-display font-extrabold text-[15px]">ATS Resume Builder</span>
+            <span className="font-display font-extrabold text-[15px]">AI Work & Study Assistant</span>
           </div>
           <div className="flex items-center gap-3">
-            <a href="/blog" className="text-[12px] font-bold" style={{color:"var(--primary)"}}>Blog</a>
-            <span className="text-[11px] font-bold px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)",color:"var(--accent-dark)"}}>Free prototype</span>
+            <a href="/blog" className="text-[12px] font-bold" style={{color:"var(--primary)"}}>Blog</a><a href="/privacy.html" className="text-[12px] font-bold" style={{color:"var(--ink-soft)"}}>Privacy</a><a href="/terms.html" className="text-[12px] font-bold" style={{color:"var(--ink-soft)"}}>Terms</a>
+            <span className="text-[11px] font-bold px-2.5 py-1 rounded-full" style={{background:"var(--accent-soft)",color:"var(--accent-dark)"}}>AI workspace</span>
           </div>
         </div>
         <div className="flex gap-2 overflow-x-auto">
-          {[["resume","Resume & Cover Letter"],["interview","Interview Prep"],["linkedin","LinkedIn"],["tracker","Application Tracker"]].map(([id,label])=>(
+          {[["home","AI Home"],["robot","🤖 Robot Mode"],["pdf","PDF Tools"],["documents","Document AI"],["study","Study Robot"],["exam","Exam Robot"],["office","Office Robot"],["career","Career Robot"],["resume","Jobs & Resume"],["interview","Interview"],["linkedin","LinkedIn"],["tracker","Tracker"]].map(([id,label])=>(
+
             <button key={id} onClick={()=>setSection(id)} className="px-3 py-1.5 rounded-lg text-[12.5px] font-bold whitespace-nowrap"
               style={section===id?{background:"var(--primary-soft)",color:"var(--primary-dark)"}:{color:"var(--ink-soft)"}}>{label}</button>
           ))}
         </div>
       </div>
+
+      {section==="home" && <div className="max-w-6xl mx-auto p-4"><CommandCenter onNavigate={setSection}/><div className="grid md:grid-cols-3 gap-4"><Card className="p-4"><div className="font-bold">📄 PDF & Documents</div><div className="text-[12px] mt-1" style={{color:"var(--ink-soft)"}}>PDF organize करें या अपनी file से AI को काम दें।</div><Btn variant="secondary" size="sm" className="mt-3" onClick={()=>setSection("pdf")}>Open PDF tools</Btn></Card><Card className="p-4"><div className="font-bold">🎓 Study & Exams</div><div className="text-[12px] mt-1" style={{color:"var(--ink-soft)"}}>Explain, notes, MCQ, revision और exam practice।</div><Btn variant="secondary" size="sm" className="mt-3" onClick={()=>setSection("study")}>Open Study</Btn></Card><Card className="p-4"><div className="font-bold">💼 Jobs & Office</div><div className="text-[12px] mt-1" style={{color:"var(--ink-soft)"}}>Resume, interview, email, reports और career help।</div><Btn variant="secondary" size="sm" className="mt-3" onClick={()=>setSection("career")}>Open Career</Btn></Card></div><JobHistory/></div>}
+      {section==="robot" && <RobotMode onNavigate={setSection}/>}
+      {section==="pdf" && <PDFTools/>}
+      {section==="documents" && <DocumentRobot/>}
+      {section==="study" && <StudyRobot/>}
+      {section==="exam" && <ExamRobot/>}
+      {section==="office" && <OfficeRobot/>}
+      {section==="career" && <CareerRobot/>}
 
       {section==="resume" && (
       <div className="max-w-6xl mx-auto p-4 grid lg:grid-cols-2 gap-4">

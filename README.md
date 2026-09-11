@@ -113,3 +113,26 @@ the free `*.pages.dev` address works fine for testing and sharing with friends/f
 `functions/api/generate-resume.js` has a comment at the top explaining exactly what to
 change — the prompt, validation, and response shape all stay the same; only the API
 call itself changes.
+
+## V4 additions
+- Expanded browser-side PDF workspace: remove/extract pages, page numbers, watermark, PDF→JPG, optimize/re-save.
+- Added Exam Robot API and UI for MCQs, mini mock tests, explanations, revision plans, strategy and practice questions.
+- Added Document AI navigation from the PDF workspace.
+
+## V7 additions
+- PDF Preview & Organize: page thumbnails, remove/keep, reorder, per-page rotate, export.
+- Rebuild PDF wording replaces the old misleading "Optimize PDF" label; it does not promise image compression.
+- Document AI OCR fallback now checks pages individually and OCRs only pages with little/no selectable text.
+- Robot Mode now returns a usable workspace route and an input hint.
+- Frontend AI requests have a 30-second timeout and clearer network/HTTP errors.
+- Recent AI work history is stored locally in the browser (last 10 items) and can be cleared.
+
+## V8 performance architecture
+- Heavy browser libraries are lazy-loaded only when their feature is used: PDF-Lib, JSZip, Tesseract.js and docx.
+- React now uses the production UMD builds.
+- PDF.js is loaded only when a PDF preview/text/OCR operation starts.
+- Cloudflare Pages `_routes.json` limits Pages Function invocation to dynamic API/blog/sitemap routes; normal static assets are served directly.
+- AI request timeout is 60 seconds with clearer retry/network messages.
+- The site intentionally does not claim that “Rebuild PDF” is image compression; it only re-saves the PDF with compact object streams.
+
+Cloudflare Pages currently documents that static asset requests are free/unlimited and that `_routes.json` can exclude static routes from Pages Function invocation. See the official Cloudflare Pages routing/pricing documentation before changing routing behavior.
