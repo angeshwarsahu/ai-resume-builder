@@ -1,15 +1,14 @@
 <!DOCTYPE html>
-<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>ATS Resume Builder — AI Powered</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&family=Merriweather:wght@400;700&family=Noto+Sans+Devanagari:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -49,6 +48,23 @@
 </head>
 <body>
 <div id="root"></div>
+<script>
+(function(){
+  window.addEventListener("error", function(e){
+    var root = document.getElementById("root");
+    if (!root) return;
+    if (root.children.length === 0) {
+      root.innerHTML =
+        '<div style="font-family:Arial,sans-serif;max-width:680px;margin:80px auto;padding:24px;text-align:center">' +
+        '<h2 style="margin-bottom:10px">ATS Resume Builder</h2>' +
+        '<p style="color:#555">The app could not start in this browser. Please refresh once. If it still fails, open the site in Chrome/Edge and disable extensions for this site.</p>' +
+        '<p style="font-size:12px;color:#888;word-break:break-word">' +
+        String((e && (e.message || (e.error && e.error.message))) || "Startup error") +
+        '</p></div>';
+    }
+  });
+})();
+</script>
 <script type="text/babel" data-presets="react">
 const {useState,useEffect,useMemo} = React;
 
